@@ -1,5 +1,4 @@
 # %%
-
 import torch
 from torch.utils.data import Dataset, DataLoader, RandomSampler
 import scipy.io as sio
@@ -43,11 +42,11 @@ Y_PINN = WS_data["Y_PINN"]
 T_PINN = WS_data["T_PINN"]
 # Data WS
 T_WS = WS_data["T_WS"]
-P_WS = WS_data["P_WS"]
-U_WS = WS_data["U_WS"]
-V_WS = WS_data["V_WS"]
 X_WS = WS_data["X_WS"]
 Y_WS = WS_data["Y_WS"]
+U_WS = WS_data["U_WS"]
+V_WS = WS_data["V_WS"]
+P_WS = WS_data["P_WS"]
 # Data val
 WS_val = WS_data["WS_val"]
 T_val = WS_data["T_val"]
@@ -69,6 +68,14 @@ batch_WS = WS_data["batch_WS"][0][0]
 # %%
 batch_PINN#.shape
 
+# %%
+print(f"{np.nanmax(T_WS)=} , {np.nanmin(T_WS)=}")
+print(f"{np.nanmax(P_WS)=} , {np.nanmin(P_WS)=}")
+print(f"{np.nanmax(U_WS)=} , {np.nanmin(U_WS)=}")
+print(f"{np.nanmax(T_WS)=} , {np.nanmin(T_WS)=}")
+print(f"{np.nanmax(X_WS)=} , {np.nanmin(X_WS)=}")
+print(f"{np.nanmax(Y_WS)=} , {np.nanmin(Y_WS)=}")
+
 # %% [markdown]
 # # Utilidades
 
@@ -80,6 +87,8 @@ print(f"{device=}")
 # Training
 num_epochs = 1000 # number of epochs
 lamb = 2 # Tuning of physics constraints
+# dtype = np.float64
+dtype = np.float32
 
 # %%
 def count_parameters(model):
@@ -124,10 +133,10 @@ class WSDataset(Dataset):
     """
     def __init__(self, T_WS, X_WS, Y_WS, target_WS):
         t, x, y, tgt = _flatten_grid(T_WS, X_WS, Y_WS, target_WS)
-        self.t = torch.from_numpy(t.astype(np.float64))
-        self.x = torch.from_numpy(x.astype(np.float64))
-        self.y = torch.from_numpy(y.astype(np.float64))
-        self.target = torch.from_numpy(tgt.astype(np.float64))
+        self.t = torch.from_numpy(t.astype(dtype))
+        self.x = torch.from_numpy(x.astype(dtype))
+        self.y = torch.from_numpy(y.astype(dtype))
+        self.target = torch.from_numpy(tgt.astype(dtype))
 
     def __len__(self):
         return self.t.shape[0]
@@ -144,9 +153,9 @@ class WSEqnRefDataset(Dataset):
     """
     def __init__(self, T_WS, X_WS, Y_WS):
         t, x, y, _ = _flatten_grid(T_WS, X_WS, Y_WS)
-        self.t = torch.from_numpy(t.astype(np.float64))
-        self.x = torch.from_numpy(x.astype(np.float64))
-        self.y = torch.from_numpy(y.astype(np.float64))
+        self.t = torch.from_numpy(t.astype(dtype))
+        self.x = torch.from_numpy(x.astype(dtype))
+        self.y = torch.from_numpy(y.astype(dtype))
 
     def __len__(self):
         return self.t.shape[0]
@@ -162,14 +171,14 @@ class PINNEqnDataset(Dataset):
     """
     def __init__(self, T_PINN, X_PINN, Y_PINN):
         t, x, y, _ = _flatten_grid(T_PINN, X_PINN, Y_PINN)
-        self.t = torch.from_numpy(t.astype(np.float64))
-        self.x = torch.from_numpy(x.astype(np.float64))
-        self.y = torch.from_numpy(y.astype(np.float64))
-        print(self.t.shape)
-        print(self.x.shape)
-        print(self.y.shape)
-        print(self.t.shape[0])
-        print(torch.concat([self.t, self.x, self.y], axis=1))
+        self.t = torch.from_numpy(t.astype(dtype))
+        self.x = torch.from_numpy(x.astype(dtype))
+        self.y = torch.from_numpy(y.astype(dtype))
+        # print(self.t.shape)
+        # print(self.x.shape)
+        # print(self.y.shape)
+        # print(self.t.shape[0])
+        # print(torch.concat([self.t, self.x, self.y], axis=1))
 
     def __len__(self):
         return self.t.shape[0]
@@ -229,12 +238,6 @@ loader_eqns_ref = DataLoader(ds_eqns_ref, batch_size=batch_WS, sampler=sampler_e
 loader_eqns = DataLoader(ds_eqns, batch_size=batch_PINN, sampler=sampler_eqns, pin_memory=True)
 
 
-# %%
-# # Se cargan los batches a device
-# for loader in [loader_u,loader_v,loader_p,loader_eqns_ref,loader_eqns,]:
-#     for batch in loader:
-#         batch = move_to_device(batch, device)
-
 # %% [markdown]
 # # Capa personalizada: GammaBiasLayer
 
@@ -257,7 +260,7 @@ class GammaBiasLayer(nn.Module):
         linear = nn.Linear(in_features, out_features, bias=False)
         # Inicialización uniforme [-1, 1], como en tu RandomUniform
         nn.init.uniform_(linear.weight, a=-1.0, b=1.0)
-
+        
         # Weight Normalization (equivalente a tfa.layers.WeightNormalization)
         self.w = weight_norm(linear)  # añade weight_g y weight_v internamente
 
@@ -275,79 +278,86 @@ class GammaBiasLayer(nn.Module):
 # # PINN
 
 # %%
+
 # class PINNNet(nn.Module):
 #     def __init__(self, num_input_variables=3, num_output_variables=3):
 #         super().__init__()
-
 #         neurons = 200 * num_output_variables
-#         layers_sizes = (
-#             [num_input_variables]
-#             + (2 * (num_input_variables + num_output_variables)) * [neurons]
-#             + [num_output_variables]
-#         )
-#         # Guardamos para reproducir los mismos rangos de tu for
-#         L = layers_sizes
-#         # Índices de particiones como en tu código
-#         mid_end = 2 * int((len(L) - 2) / 3)
-
-#         # Construimos los módulos siguiendo el mismo patrón
-#         mods = []
-
-#         # Primer bloque: GammaBias(layers[1]) + tanh
-#         mods.append(GammaBiasLayer(L[0], L[1]))
-#         mods.append(nn.Tanh())
-
-#         # Bloques intermedios: for l in layers[2 : mid_end]: GammaBias(l) + tanh
-#         in_dim = L[1]
-#         for l in L[2:mid_end]:
-#             mods.append(GammaBiasLayer(in_dim, l))
-#             mods.append(nn.Tanh())
-#             in_dim = l
-
-#         # Bloques finales (antes de salida): for l in layers[mid_end : -1]:
-#         #   GammaBias(layers[-2])  (tal como en tu código original)
-#         # Esto apila capas con anchura fija igual a L[-2]
-#         penultimate = L[-2]
-#         for _ in L[mid_end:-1]:
-#             mods.append(GammaBiasLayer(in_dim, penultimate))
-#             # OJO: el original no aplicaba activación aquí
-#             in_dim = penultimate
-
-#         # Capa de salida: GammaBias(layers[-1])
-#         mods.append(GammaBiasLayer(in_dim, L[-1]))
-
-#         self.net = nn.Sequential(*mods)
+#         hidden_sizes = (2 * (num_input_variables + num_output_variables))*[neurons]
+#         layers = []
+#         last = num_input_variables
+#         for h in hidden_sizes + [num_output_variables]:
+#                      layers.append(GammaBiasLayer(last, h))
+#                      last = h
+#         self.layers = nn.ModuleList(layers)
+#         self.activation = nn.Tanh()
 
 #     def forward(self, x):
-#         # x: [N, 3] -> [N, 3]  (u, v, p)
-#         return self.net(x)
+#         # Aplicar activación solo en las primeras 5 capas ocultas
+#         for i, layer in enumerate(self.layers):
+#             x = layer(x)
+#             if i < 8:  # activación en capas 0 a 4
+#                          x = self.activation(x)
+#         return x
 
 # %%
 
 class PINNNet(nn.Module):
     def __init__(self, num_input_variables=3, num_output_variables=3):
         super().__init__()
-        neurons = 200 * num_output_variables 
-        hidden_sizes = (2 * (num_input_variables + num_output_variables))*[neurons]
-        layers = []
-        last = num_input_variables
-        for h in hidden_sizes + [num_output_variables]:
-            layers.append(GammaBiasLayer(last, h))
-            last = h
-        self.layers = nn.ModuleList(layers)
         self.activation = nn.Tanh()
+        self.l01 = GammaBiasLayer(3, 600)
+        self.l02 = GammaBiasLayer(600, 600)
+        self.l03 = GammaBiasLayer(600, 600)
+        self.l04 = GammaBiasLayer(600, 600)
+        self.l05 = GammaBiasLayer(600, 600)
+        self.l06 = GammaBiasLayer(600, 600)
+        self.l07 = GammaBiasLayer(600, 600)
+        self.l08 = GammaBiasLayer(600, 600)
+        self.l09 = GammaBiasLayer(600, 600)
+        self.l10 = GammaBiasLayer(600, 600)
+        self.l11 = GammaBiasLayer(600, 600)
+        self.l12 = GammaBiasLayer(600, 600)
+        self.lfi = GammaBiasLayer(600, 3)
 
     def forward(self, x):
-        len1 = int(len(self.layers)/3)
-        len2 = int(2*len(self.layers)/3)
-        for layer in self.layers[:len1]:
-            x = self.activation(layer(x))
-        for layer in self.layers[len1:]:
-            x = layer(x)
-        return x
+        
+        a01 = self.activation(self.l01(x))
+        a02 = self.activation(self.l02(a01))
+        a03 = self.activation(self.l03(a02))
+        a04 = self.activation(self.l04(a03))
+        a05 = self.activation(self.l05(a04))
+        a06 = self.activation(self.l06(a05))
+        a07 = self.activation(self.l07(a06))
+        a08 = self.activation(self.l08(a07))
+        a09 = self.l09(a08)
+        a10 = self.l10(a09)
+        a11 = self.l11(a10)
+        a12 = self.l12(a11)
+        afi = self.lfi(a12)
+
+
+        return afi, (a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, afi, )
+
+
 
 # %%
+# model = PINNNet().to(device).double()
 model = PINNNet().to(device)
+
+# %%
+#  'named_parameters',
+#  'parameters',
+def info_model(model):
+    for i in model.named_parameters(): 
+        print(20*"#")
+        print(f"Parámetro: {i[0]:10}")
+        print(f"Dim parámetro: {i[1].shape}")
+        print(f"Dim parámetro: {i[1][:5]}")
+        print("")
+
+# %%
+info_model(model)
 
 # %% [markdown]
 # # Funciones de perdidas
@@ -357,6 +367,7 @@ mse_loss = nn.MSELoss()
 # mse_loss = nn.MSELoss(reduction="mean")
 
 # @torch.enable_grad()
+# def loss_NS_2D(model, t_eqns, x_eqns, y_eqns):
 def loss_NS_2D(model, t_eqns, x_eqns, y_eqns):
     """
     Calcula los residuales 2D (incompresible) aproximados:
@@ -370,7 +381,7 @@ def loss_NS_2D(model, t_eqns, x_eqns, y_eqns):
         ten.requires_grad_(True)
 
     X = torch.cat([t_eqns, x_eqns, y_eqns], dim=1)  # [N, 3]
-    Y = model(X)                                     # [N, 3]
+    Y, actv = model(X)                                     # [N, 3]
     u, v, p = Y[:, 0:1], Y[:, 1:2], Y[:, 2:3]
 
     ones_u = torch.ones_like(u)
@@ -407,21 +418,29 @@ def _safe_std(x: torch.Tensor, eps: float = 1e-8):
     s = torch.std(x)
     return s.clamp_min(eps)
 
+# def loss_u(t_b, x_b, y_b, u_b):
 def loss_u(model, t_b, x_b, y_b, u_b):
     X = torch.cat([t_b, x_b, y_b], dim=1)
-    Y = model(X)
+    Y, actv = model(X)
     u_pred = Y[:, 0:1]
+    for i, a in enumerate(actv):
+        print(f"Capa {i:02d}: shape={tuple(a.shape)}, mean={a.mean():+.4f}, std={a.std():.4f}")
+    # print(f"{X[:5,:]=}")
+    # print(f"{Y[:5,:]=}")
+    # print(f"{_safe_std(u_b) ** 2:=.2f}")
     return mse_loss(u_pred, u_b) / (_safe_std(u_b) ** 2)
 
+# def loss_v(t_b, x_b, y_b, v_b):
 def loss_v(model, t_b, x_b, y_b, v_b):
     X = torch.cat([t_b, x_b, y_b], dim=1)
-    Y = model(X)
+    Y, actv = model(X)
     v_pred = Y[:, 1:2]
     return mse_loss(v_pred, v_b) / (_safe_std(v_b) ** 2)
 
+# def loss_p(t_b, x_b, y_b, p_b):
 def loss_p(model, t_b, x_b, y_b, p_b):
     X = torch.cat([t_b, x_b, y_b], dim=1)
-    Y = model(X)
+    Y, actv = model(X)
     p_pred = Y[:, 2:3]
     return mse_loss(p_pred, p_b) / (_safe_std(p_b) ** 2)
 
@@ -445,17 +464,9 @@ def loss_total(
     V_e = loss_v(model, t_v_b, x_v_b, y_v_b, v_v_b)
 
     total_e = NS_eqns + NS_data + U_e + V_e + P_e
-    # Misma forma de tu retorno: suma de cuadrados/total
-#     print(f"""
-# {NS_eqns=}
-# {NS_data=}
-# {U_e=}
-# {V_e=}
-# {P_e=}
-# {total_e=}
-#           """)
-    # return total_e
+
     return (NS_eqns ** 2 + NS_data ** 2 + U_e ** 2 + V_e ** 2 + P_e ** 2) / total_e
+    # return total_e
 
 # %% [markdown]
 # # Gradiente y optimizador
@@ -464,8 +475,7 @@ def loss_total(
 model_optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # %%
-scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
-# scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+scaler = torch.amp.GradScaler("cuda")
 
 def grad_amp(model, model_optimizer, scaler,
              t_u_batch, x_u_batch, y_u_batch, u_u_batch,
@@ -474,12 +484,9 @@ def grad_amp(model, model_optimizer, scaler,
              t_eqns_ref_batch, x_eqns_ref_batch, y_eqns_ref_batch,
              t_eqns_batch, x_eqns_batch, y_eqns_batch,
              lamb):
-    model.train()
-    model_optimizer.zero_grad(set_to_none=True)
-
-    # with torch.cuda.amp.autocast(enabled=False):
-    with torch.amp.autocast(dtype=torch.float64, device_type=device.type):
-    # with torch.cuda.amp.autocast(dtype=torch.float64):
+    
+    use_amp = False
+    with torch.amp.autocast(device_type=device.type, enabled=use_amp):
         loss_value = loss_total(model,
                                 t_u_batch, x_u_batch, y_u_batch, u_u_batch,
                                 t_v_batch, x_v_batch, y_v_batch, v_v_batch,
@@ -488,47 +495,34 @@ def grad_amp(model, model_optimizer, scaler,
                                 t_eqns_batch, x_eqns_batch, y_eqns_batch,
                                 lamb)
 
+    # Escalar la pérdida antes del backward
     scaler.scale(loss_value).backward()
+
+    # Revisa gradientes ANTES del step
+    all_finite = True
+    for n, p in model.named_parameters():
+        if p.grad is None: 
+            continue
+        if not torch.isfinite(p.grad).all():
+            print(f"[WARN] grad no finito en {n}")
+            all_finite = False
+            break
+
+    # (Opcional) Clipping y chequeo de gradientes
+    scaler.unscale_(model_optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+    # Paso del optimizador de forma segura
     scaler.step(model_optimizer)
+
+    # Actualiza el factor de escala automáticamente
     scaler.update()
 
-    # Si quieres inspeccionar gradientes:
-    grads = [p.grad.detach().clone() if p.grad is not None else None
-             for p in model.parameters() if p.requires_grad]
+    # # Si quieres inspeccionar gradientes:
+    # grads = [p.grad.detach().clone() if p.grad is not None else None
+    #          for p in model.parameters() if p.requires_grad]
 
-    return loss_value.detach(), grads
-
-# %%
-# def grad(model,
-#          t_u_batch, x_u_batch, y_u_batch, u_u_batch,
-#          t_v_batch, x_v_batch, y_v_batch, v_v_batch,
-#          t_p_batch, x_p_batch, y_p_batch, p_p_batch,
-#          t_eqns_ref_batch, x_eqns_ref_batch, y_eqns_ref_batch,
-#          t_eqns_batch, x_eqns_batch, y_eqns_batch,
-#          lamb):
-    
-#     model.train()  # Asegura que el modelo esté en modo entrenamiento
-#     model.zero_grad()  # Limpia gradientes anteriores
-
-#     # Forward pass
-#     loss_value = loss_total(model,
-#                             t_u_batch, x_u_batch, y_u_batch, u_u_batch,
-#                             t_v_batch, x_v_batch, y_v_batch, v_v_batch,
-#                             t_p_batch, x_p_batch, y_p_batch, p_p_batch,
-#                             t_eqns_ref_batch, x_eqns_ref_batch, y_eqns_ref_batch,
-#                             t_eqns_batch, x_eqns_batch, y_eqns_batch,
-#                             lamb,
-#                             training=True)
-
-#     # Backward pass
-#     loss_value.backward()
-
-#     # Extraer gradientes
-#     gradient_model = [p.grad.clone() if p.grad is not None else None
-#                       for p in model.parameters() if p.requires_grad]
-
-#     return loss_value.detach(), gradient_model
-
+    return loss_value.detach()#, grads
 
 # %% [markdown]
 # # Helpers de métricas simples por época (media acumulada)
@@ -572,8 +566,75 @@ def adjust_learning_rate(optimizer, epoch_loss):
     return new_lr
 
 # %%
-def train_eval_model(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns):
+def train(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns):
 
+    for idx,(\
+        (t_u_b, x_u_b, y_u_b, u_u_b), \
+        (t_v_b, x_v_b, y_v_b, v_v_b), \
+        (t_p_b, x_p_b, y_p_b, p_p_b), \
+        (t_eq_ref_b, x_eq_ref_b, y_eq_ref_b), \
+        (t_eq_b, x_eq_b, y_eq_b)) in enumerate(zip(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns)):
+        
+
+        # Se envian tensores a device
+        t_u_b = t_u_b.to(device)
+        x_u_b = x_u_b.to(device)
+        y_u_b = y_u_b.to(device)
+        u_u_b = u_u_b.to(device)
+        t_v_b = t_v_b.to(device)
+        x_v_b = x_v_b.to(device)
+        y_v_b = y_v_b.to(device)
+        v_v_b = v_v_b.to(device)
+        t_p_b = t_p_b.to(device)
+        x_p_b = x_p_b.to(device)
+        y_p_b = y_p_b.to(device)
+        p_p_b = p_p_b.to(device)
+        t_eq_ref_b = t_eq_ref_b.to(device)
+        x_eq_ref_b = x_eq_ref_b.to(device)
+        y_eq_ref_b = y_eq_ref_b.to(device)
+        t_eq_b = t_eq_b.to(device)
+        x_eq_b = x_eq_b.to(device)
+        y_eq_b = y_eq_b.to(device)
+
+
+        model_optimizer.zero_grad(set_to_none=True)
+
+        use_amp = False
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            loss_value = loss_total(model, t_u_b, x_u_b, y_u_b, u_u_b,
+                                    t_v_b, x_v_b, y_v_b, v_v_b,
+                                    t_p_b, x_p_b, y_p_b, p_p_b,
+                                    t_eq_ref_b, x_eq_ref_b, y_eq_ref_b,
+                                    t_eq_b, x_eq_b, y_eq_b,
+                                    lamb)
+
+        # Escalar la pérdida antes del backward
+        scaler.scale(loss_value).backward()
+
+        # Revisa gradientes ANTES del step
+        all_finite = True
+        for n, p in model.named_parameters():
+            if p.grad is None: 
+                continue
+            if not torch.isfinite(p.grad).all():
+                print(f"[WARN] grad no finito en {n}")
+                all_finite = False
+                break
+
+        # (Opcional) Clipping y chequeo de gradientes
+        scaler.unscale_(model_optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        # Paso del optimizador de forma segura
+        scaler.step(model_optimizer)
+
+        # Actualiza el factor de escala automáticamente
+        scaler.update()
+        
+        return loss_value
+
+# %%
+def eval(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns):
     for idx,(\
         (t_u_b, x_u_b, y_u_b, u_u_b), \
         (t_v_b, x_v_b, y_v_b, v_v_b), \
@@ -600,44 +661,19 @@ def train_eval_model(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns)
         t_eq_b = t_eq_b.to(device)
         x_eq_b = x_eq_b.to(device)
         y_eq_b = y_eq_b.to(device)
-
-        with torch.enable_grad():
-            loss_train, grads = grad_amp(model, model_optimizer, scaler,
-                                         t_u_b, x_u_b, y_u_b, u_u_b,
-                                         t_v_b, x_v_b, y_v_b, v_v_b,
-                                         t_p_b, x_p_b, y_p_b, p_p_b,
-                                         t_eq_ref_b, x_eq_ref_b, y_eq_ref_b,
-                                         t_eq_b, x_eq_b, y_eq_b, lamb)
-            epoch_loss_avg.update(loss_train)
-
-
-        model.eval()
-        # with torch.no_grad():
+        
         NS_loss = loss_NS_2D(model, t_eq_b, x_eq_b, y_eq_b)
-        P_loss = loss_u(model, t_u_b, x_u_b, y_u_b, u_u_b)
-        U_loss = loss_v(model, t_v_b, x_v_b, y_v_b, v_v_b)
-        V_loss = loss_p(model, t_p_b, x_p_b, y_p_b, p_p_b)
-
-        epoch_NS_loss_avg.update(NS_loss)
-        epoch_P_loss_avg.update(P_loss)
-        epoch_U_loss_avg.update(U_loss)
-        epoch_V_loss_avg.update(V_loss)
-
-        return loss_train, NS_loss, P_loss, U_loss, V_loss
         
+        with torch.inference_mode():
+            
+            U_loss  = loss_u(model, t_u_b, x_u_b, y_u_b, u_u_b)
+            V_loss  = loss_v(model, t_v_b, x_v_b, y_v_b, v_v_b)
+            P_loss  = loss_p(model, t_p_b, x_p_b, y_p_b, p_p_b)
+            
+        return NS_loss, U_loss, V_loss, P_loss
+            
+
         
-        # # End epoch
-        # epoch_loss_avg.update(loss_train)
-        # epoch_NS_loss_avg.update(NS_loss)
-        # epoch_P_loss_avg.update(P_loss)
-        # epoch_U_loss_avg.update(U_loss)
-        # epoch_V_loss_avg.update(V_loss)
-
-
-
-
-
-    ...
 
 # %%
 # Obten la mejor pérdida 
@@ -651,7 +687,6 @@ U_loss_results = []
 V_loss_results = []
 
 for epoch in range(1, num_epochs + 1):
-
     # Inicializamos registros de las funciones de perdida
     epoch_loss_avg = RunningMean()
     epoch_NS_loss_avg = RunningMean()
@@ -659,296 +694,42 @@ for epoch in range(1, num_epochs + 1):
     epoch_U_loss_avg = RunningMean()
     epoch_V_loss_avg = RunningMean()
 
-    # Train
-    loss_train, NS_loss, P_loss, U_loss, V_loss = train_eval_model(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns)
+    # --------- ENTRENAMIENTO ---------
+    model.train()
+    loss_train = train(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns)
+    
+     # --------- VALIDACIÓN (SIN GRADIENTES) ---------
+    model.eval()
+    NS_loss, U_loss, V_loss, P_loss = eval(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns)
+    
     # End epoch
-    train_loss_results.append(epoch_loss_avg.result)
-    NS_loss_results.append(epoch_NS_loss_avg.result)
-    P_loss_results.append(epoch_P_loss_avg.result)
-    U_loss_results.append(epoch_U_loss_avg.result)
-    V_loss_results.append(epoch_V_loss_avg.result)
+    train_loss_results.append(loss_train)
+    NS_loss_results.append(NS_loss)
+    U_loss_results.append(U_loss)
+    V_loss_results.append(V_loss)
+    P_loss_results.append(P_loss)
 
     # Update learning rate
     new_lr = adjust_learning_rate(model_optimizer, loss_train)
     
+    
     print(f"Epoch: {epoch:4} | "
           f"Loss training: {loss_train:10.4e} | "
           f"NS_Loss: {NS_loss:10.4e} | "
-          f"P_Loss: {P_loss:10.4e} | "
           f"U_Loss: {U_loss:10.4e} | "
           f"V_Loss: {V_loss:10.4e} | "
+          f"P_Loss: {P_loss:10.4e} | "
           f"learning rate: {new_lr:10.4e} | "
           )
 
+    print("\n=== GRADIENTS ===")
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"{name:20s} | grad.mean={param.grad.mean():+.4e} | grad.std={param.grad.std():.4e}")
+        else:
+            print(f"{name:20s} | grad=None")
 
-# %%
-# print(f"|{0.0001234:10.4e}|")
-
-# %%
-# for epoch in range(10):
-#     for (t_u,x_u,y_u,u_u), (t_v,x_v,y_v,v_v) in zip(loader_u, loader_v):
-#         # print(f"{x_u.shape=}")
-#         # print(f"{y_u=}")
-#         # print(f"{t_u=}")
-#         # print(f"{u_u=}")
-#         # print(torch.concat([t_u,x_u,y_u,u_u], axis=1))
-#         # print("*"*10)
-#         # print(f"{x_v.shape=}")
-#         # print(f"{y_v=}")
-#         # print(f"{t_v=}")
-#         # print(f"{v_v=}")
-#         print(torch.concat([t_v,x_v,y_v,v_v], axis=1)[:5,:])
-
-
-#         ans = input("stop?")
-#         if ans == "y":
-#             break
-#     if ans == "y":
-#         break
-
-# %%
-# train_loss_results = []
-# NS_loss_results = []
-# P_loss_results = []
-# U_loss_results = []
-# V_loss_results = []
-
-# for epoch in range(num_epochs):
-#     model.train()
-#     epoch_loss_avg = RunningMean()
-#     epoch_NS_loss_avg = RunningMean()
-#     epoch_P_loss_avg = RunningMean()
-#     epoch_U_loss_avg = RunningMean()
-#     epoch_V_loss_avg = RunningMean()
-
-#     # zip se detiene en el DataLoader más corto (equivale a tu min_div)
-#     for (t_u_b, x_u_b, y_u_b, u_u_b), \
-#         (t_v_b, x_v_b, y_v_b, v_v_b), \
-#         (t_p_b, x_p_b, y_p_b, p_p_b), \
-#         (t_eq_ref_b, x_eq_ref_b, y_eq_ref_b), \
-#         (t_eq_b, x_eq_b, y_eq_b) in zip(loader_u, loader_v, loader_p, loader_eqns_ref, loader_eqns):
-
-#         # Enviar a device
-#         t_u_b, x_u_b, y_u_b, u_u_b = to_dev(t_u_b, x_u_b, y_u_b, u_u_b, device=device)
-#         t_v_b, x_v_b, y_v_b, v_v_b = to_dev(t_v_b, x_v_b, y_v_b, v_v_b, device=device)
-#         t_p_b, x_p_b, y_p_b, p_p_b = to_dev(t_p_b, x_p_b, y_p_b, p_p_b, device=device)
-#         t_eq_ref_b, x_eq_ref_b, y_eq_ref_b = to_dev(t_eq_ref_b, x_eq_ref_b, y_eq_ref_b, device=device)
-#         t_eq_b, x_eq_b, y_eq_b = to_dev(t_eq_b, x_eq_b, y_eq_b, device=device)
-
-#         # Paso de entrenamiento
-#         model_optimizer.zero_grad(set_to_none=True)
-#         loss_train = loss_total(
-#             model,
-#             # u
-#             t_u_b, x_u_b, y_u_b, u_u_b,
-#             # v
-#             t_v_b, x_v_b, y_v_b, v_v_b,
-#             # p
-#             t_p_b, x_p_b, y_p_b, p_p_b,
-#             # eqns ref
-#             t_eq_ref_b, x_eq_ref_b, y_eq_ref_b,
-#             # eqns
-#             t_eq_b, x_eq_b, y_eq_b,
-#             lamb, training=True
-#         )
-#         loss_train.backward()
-#         model_optimizer.step()
-
-#         # Métricas por lote (sin gradiente, modo eval para consistencia)
-#         model.eval()
-#         with torch.no_grad():
-#             NS_loss = loss_NS_2D(model, t_eq_b.clone(), x_eq_b.clone(), y_eq_b.clone(), training=False)
-#             P_loss = loss_p(model, t_p_b, x_p_b, y_p_b, p_p_b, training=False)
-#             U_loss = loss_u(model, t_u_b, x_u_b, y_u_b, u_u_b, training=False)
-#             V_loss = loss_v(model, t_v_b, x_v_b, y_v_b, v_v_b, training=False)
-
-#         # Acumular promedios
-#         bs = t_u_b.shape[0]  # cualquier batch size como peso
-#         epoch_loss_avg.update(loss_train, n=bs)
-#         epoch_NS_loss_avg.update(NS_loss, n=bs)
-#         epoch_P_loss_avg.update(P_loss, n=bs)
-#         epoch_U_loss_avg.update(U_loss, n=bs)
-#         epoch_V_loss_avg.update(V_loss, n=bs)
-
-#         model.train()  # volver a train para el siguiente batch
-
-#     # --- fin de la época: guardar resultados de métricas ---
-#     train_loss_results.append(epoch_loss_avg.result)
-#     NS_loss_results.append(epoch_NS_loss_avg.result)
-#     P_loss_results.append(epoch_P_loss_avg.result)
-#     U_loss_results.append(epoch_U_loss_avg.result)
-#     V_loss_results.append(epoch_V_loss_avg.result)
-
-#     # --- actualizar LR como en tu scheduler por umbrales ---
-#     avg = epoch_loss_avg.result
-#     if avg > 1e-1:
-#         new_lr = 1e-3
-#     elif avg > 3e-2:
-#         new_lr = 1e-4
-#     elif avg > 3e-3:
-#         new_lr = 1e-5
-#     else:
-#         new_lr = 1e-6
-#     for g in model_optimizer.param_groups:
-#         g['lr'] = new_lr
-
-#     print(f"Epoch: {epoch:4d} "
-#           f"Loss_training: {epoch_loss_avg.result:.3e} "
-#           f"NS_loss: {epoch_NS_loss_avg.result:.3e} "
-#           f"P_loss: {epoch_P_loss_avg.result:.3e} "
-#           f"U_loss: {epoch_U_loss_avg.result:.3e} "
-#           f"V_loss: {epoch_V_loss_avg.result:.3e}  "
-#           f"(lr={new_lr:.0e})")
-
-#     # ------------------ Guardado de predicciones/modelo ------------------
-#     if (epoch + 1) % num_epochs == 0:
-#         model.eval()
-#         with torch.no_grad():
-#             # Salidas de alta resolución (PINN grid)
-#             U_PINN = np.zeros_like(X_PINN)
-#             V_PINN = np.zeros_like(X_PINN)
-#             P_PINN = np.zeros_like(X_PINN)
-
-#             for snap in range(0, X_PINN.shape[1]):
-#                 t_out = torch.as_tensor(T_PINN[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 x_out = torch.as_tensor(X_PINN[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 y_out = torch.as_tensor(Y_PINN[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 X_out = torch.cat([t_out, x_out, y_out], dim=1)  # [N,3]
-#                 Y_out = model(X_out)                              # [N,3]
-#                 u_pred, v_pred, p_pred = Y_out[:,0:1], Y_out[:,1:2], Y_out[:,2:3]
-#                 U_PINN[:, snap:snap+1] = u_pred.cpu().numpy()
-#                 V_PINN[:, snap:snap+1] = v_pred.cpu().numpy()
-#                 P_PINN[:, snap:snap+1] = p_pred.cpu().numpy()
-
-#             # Predicciones en WS
-#             U_WS_pred = np.zeros_like(X_WS)
-#             V_WS_pred = np.zeros_like(X_WS)
-#             P_WS_pred = np.zeros_like(X_WS)
-
-#             for snap in range(0, X_WS.shape[1]):
-#                 t_out = torch.as_tensor(T_WS[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 x_out = torch.as_tensor(X_WS[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 y_out = torch.as_tensor(Y_WS[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 X_out = torch.cat([t_out, x_out, y_out], dim=1)
-#                 Y_out = model(X_out)
-#                 u_pred, v_pred, p_pred = Y_out[:,0:1], Y_out[:,1:2], Y_out[:,2:3]
-#                 U_WS_pred[:, snap:snap+1] = u_pred.cpu().numpy()
-#                 V_WS_pred[:, snap:snap+1] = v_pred.cpu().numpy()
-#                 P_WS_pred[:, snap:snap+1] = p_pred.cpu().numpy()
-
-#             # Predicciones en validación
-#             U_val_pred = np.zeros_like(X_val)
-#             V_val_pred = np.zeros_like(X_val)
-#             P_val_pred = np.zeros_like(X_val)
-
-#             for snap in range(0, X_val.shape[1]):
-#                 t_out = torch.as_tensor(T_val[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 x_out = torch.as_tensor(X_val[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 y_out = torch.as_tensor(Y_val[:, snap:snap+1], dtype=torch.get_default_dtype(), device=device)
-#                 X_out = torch.cat([t_out, x_out, y_out], dim=1)
-#                 Y_out = model(X_out)
-#                 u_pred, v_pred, p_pred = Y_out[:,0:1], Y_out[:,1:2], Y_out[:,2:3]
-#                 U_val_pred[:, snap:snap+1] = u_pred.cpu().numpy()
-#                 V_val_pred[:, snap:snap+1] = v_pred.cpu().numpy()
-#                 P_val_pred[:, snap:snap+1] = p_pred.cpu().numpy()
-
-#         # Guardar .mat
-#         scipy.io.savemat(
-#             f'Brussels_{epoch+1}_lambda_{lamb}_R_{R}_envelope.mat',
-#             {
-#                 'T_PINN': T_PINN, 'X_PINN': X_PINN, 'Y_PINN': Y_PINN,
-#                 'U_PINN': U_PINN, 'V_PINN': V_PINN, 'P_PINN': P_PINN,
-#                 'T_WS': T_WS, 'X_WS': X_WS, 'Y_WS': Y_WS,
-#                 'U_WS': U_WS, 'V_WS': V_WS, 'P_WS': P_WS,
-#                 'U_WS_pred': U_WS_pred, 'V_WS_pred': V_WS_pred, 'P_WS_pred': P_WS_pred,
-#                 'T_val': T_val, 'X_val': X_val, 'Y_val': Y_val,
-#                 'U_val': U_val, 'V_val': V_val, 'P_val': P_val,
-#                 'U_val_pred': U_val_pred, 'V_val_pred': V_val_pred, 'P_val_pred': P_val_pred,
-#                 'Train_loss': np.array(train_loss_results, dtype=float),
-#                 'NS_loss': np.array(NS_loss_results, dtype=float),
-#                 'P_loss': np.array(P_loss_results, dtype=float),
-#                 'U_loss': np.array(U_loss_results, dtype=float),
-#                 'V_loss': np.array(V_loss_results, dtype=float),
-#             }
-#         )
-
-#         # Guardar el modelo (state dict + versión trazada opcional)
-#         model_filename = f'PINN_model_epoch_{epoch+1}_lambda_{lamb}_R_{R}'
-#         torch.save(model.state_dict(), model_filename + ".pth")
-#         try:
-#             # Trazeo con un input dummy (ajusta el tamaño según tu caso)
-#             dummy = torch.zeros(1, 3, device=device, dtype=torch.get_default_dtype())
-#             traced = torch.jit.trace(model, dummy)
-#             traced.save(model_filename + "_traced.pt")
-#         except Exception as e:
-#             print("Aviso: no se pudo trazar el modelo (torch.jit.trace).", e)
-#         print(f"Modelo guardado en: {model_filename}.pth (y traced si fue posible)")
-
-# %%
-# 
-
-# %%
-# 
-
-# %%
-# 
-
-# %%
-# 
-
-# %% [markdown]
-# # X
-
-# %%
-# import torch
-# from torch.utils.data import Dataset, DataLoader, RandomSampler
-
-# # 1. Define a custom Dataset
-# class CustomDataset(Dataset):
-#     def __init__(self, data):
-#         self.data = data
-
-#     def __len__(self):
-#         return len(self.data)
-
-#     def __getitem__(self, idx):
-#         return self.data[idx]
-
-# # Create some dummy data
-# dummy_data = [f"sample_{i}" for i in range(10)]
-# dataset = CustomDataset(dummy_data)
-
-# # 2. Create a RandomSampler
-# # By default, replacement is False (sampling without replacement)
-# # You can also specify num_samples if you want to sample a subset
-# sampler = RandomSampler(dataset, replacement=False) 
-
-# # If you want to sample with replacement and specify a number of samples:
-# # sampler_with_replacement = RandomSampler(dataset, replacement=True, num_samples=20) 
-
-# # 3. Create a DataLoader using the sampler
-# # When a sampler is provided, the 'shuffle' argument in DataLoader should be False
-# dataloader = DataLoader(dataset, batch_size=5, sampler=sampler)
-
-# # 4. Iterate through the DataLoader to get random batches
-# print("Randomly sampled batches:")
-# for batch in dataloader:
-#     print(batch)
-
-# # Example with a fixed random seed for reproducibility
-# print("\nRandomly sampled batches with fixed seed:")
-# generator = torch.Generator()
-# generator.manual_seed(42) # Set a seed for reproducibility
-# sampler_seeded = RandomSampler(dataset, generator=generator)
-# dataloader_seeded = DataLoader(dataset, batch_size=2, sampler=sampler_seeded)
-
-# for batch in dataloader_seeded:
-#     print(batch)
-
-# %%
-# np.random.choice(10, 8, replace=False)
-
-# %%
-# 
+    info_model(model)
+    input()
 
 
